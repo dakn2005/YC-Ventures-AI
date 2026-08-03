@@ -1,0 +1,173 @@
+id: yc_oss_to_ventures_db
+namespace: ventures
+description: |
+  Downstream of yc_oss_companies_by_tag. Walks meta.json -> tags -> each tag's api
+  link (same source that flow reads), de-duplicates companies by id, and upserts
+  the selected fields into Postgres database `ventures_db`, table `yc_oss`
+  (created if it doesn't exist), on port 5440.
+
+triggers:
+  - id: after_companies_by_tag
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionStatusCondition
+        in:
+          - SUCCESS
+      - type: io.kestra.plugin.core.condition.ExecutionFlowCondition
+        namespace: ventures
+        flowId: yc_oss_companies_by_tag
+
+tasks:
+  # db_volume already holds an initialized cluster (POSTGRES_DB=postgres ran on first
+  # boot only), so ventures_db won't appear on its own and must be created here.
+  - id: ensure_database
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install --quiet psycopg2-binary
+    script: |
+      import psycopg2
+
+      conn = psycopg2.connect(
+          host="host.docker.internal", port=5440,
+          dbname="postgres", user="postgres", password="postgres",
+      )
+      conn.autocommit = True
+      with conn.cursor() as cur:
+          cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", ("ventures_db",))
+          if cur.fetchone() is None:
+              cur.execute("CREATE DATABASE ventures_db")
+              print("Created database ventures_db")
+          else:
+              print("Database ventures_db already exists")
+      conn.close()
+
+  - id: load_yc_oss
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install --quiet psycopg2-binary requests
+    script: |
+      from datetime import datetime, timezone
+
+      import psycopg2
+      import psycopg2.extras
+      import requests
+
+      META_URL = "https://yc-oss.github.io/api/meta.json"
+
+      CREATE_TABLE_SQL = """
+      CREATE TABLE IF NOT EXISTS yc_oss (
+          id BIGINT PRIMARY KEY,
+          name TEXT,
+          former_names TEXT[],
+          locations TEXT,
+          long_description TEXT,
+          one_liner TEXT,
+          tags TEXT[],
+          industries TEXT[],
+          subindustry TEXT,
+          is_hiring BOOLEAN,
+          top_company BOOLEAN,
+          non_profit BOOLEAN,
+          team_size INTEGER,
+          regions TEXT[],
+          stage TEXT,
+          launched_at TIMESTAMPTZ,
+          batch TEXT,
+          status TEXT
+      )
+      """
+
+      UPSERT_SQL = """
+      INSERT INTO yc_oss (
+          id, name, former_names, locations, long_description, one_liner,
+          tags, industries, subindustry, is_hiring, top_company, non_profit,
+          team_size, regions, stage, launched_at, batch, status
+      )
+      VALUES %s
+      ON CONFLICT (id) DO UPDATE SET
+          name = EXCLUDED.name,
+          former_names = EXCLUDED.former_names,
+          locations = EXCLUDED.locations,
+          long_description = EXCLUDED.long_description,
+          one_liner = EXCLUDED.one_liner,
+          tags = EXCLUDED.tags,
+          industries = EXCLUDED.industries,
+          subindustry = EXCLUDED.subindustry,
+          is_hiring = EXCLUDED.is_hiring,
+          top_company = EXCLUDED.top_company,
+          non_profit = EXCLUDED.non_profit,
+          team_size = EXCLUDED.team_size,
+          regions = EXCLUDED.regions,
+          stage = EXCLUDED.stage,
+          launched_at = EXCLUDED.launched_at,
+          batch = EXCLUDED.batch,
+          status = EXCLUDED.status
+      """
+
+
+      def to_row(company: dict) -> tuple:
+          launched_at = company.get("launched_at")
+          launched_at_dt = (
+              datetime.fromtimestamp(launched_at, tz=timezone.utc)
+              if launched_at is not None
+              else None
+          )
+          return (
+              company["id"],
+              company.get("name"),
+              company.get("former_names") or [],
+              company.get("all_locations"),
+              company.get("long_description"),
+              company.get("one_liner"),
+              company.get("tags") or [],
+              company.get("industries") or [],
+              company.get("subindustry"),
+              company.get("isHiring"),
+              company.get("top_company"),
+              company.get("nonprofit"),
+              company.get("team_size"),
+              company.get("regions") or [],
+              company.get("stage"),
+              launched_at_dt,
+              company.get("batch"),
+              company.get("status"),
+          )
+
+
+      print("Fetching meta.json ...")
+      meta = requests.get(META_URL, timeout=30).json()
+      tags = meta["tags"]
+      total_tags = len(tags)
+
+      companies_by_id = {}
+      for i, (tag_slug, tag_info) in enumerate(tags.items(), start=1):
+          print(f"[{i}/{total_tags}] {tag_slug} -> {tag_info['api']}")
+          companies = requests.get(tag_info["api"], timeout=30).json()
+          for company in companies:
+              companies_by_id[company["id"]] = company
+
+      print(f"Collected {len(companies_by_id)} unique companies")
+
+      rows = [to_row(c) for c in companies_by_id.values()]
+
+      conn = psycopg2.connect(
+          host="host.docker.internal", port=5440,
+          dbname="ventures_db", user="postgres", password="postgres",
+      )
+      try:
+          with conn.cursor() as cur:
+              cur.execute(CREATE_TABLE_SQL)
+              psycopg2.extras.execute_values(cur, UPSERT_SQL, rows, page_size=500)
+          conn.commit()
+      finally:
+          conn.close()
+
+      print(f"Upserted {len(rows)} rows into ventures_db.yc_oss")

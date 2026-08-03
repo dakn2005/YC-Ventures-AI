@@ -1,0 +1,62 @@
+id: yc_oss_companies_by_tag
+namespace: ventures
+description: |
+  Fetches https://yc-oss.github.io/api/meta.json, iterates every entry under `tags`,
+  follows each tag's `api` link, and loads the resulting company records into
+  Postgres via dlt. Each row is tagged with tag_slug / tag_name so a company that
+  appears under multiple tags is loaded once per tag.
+
+tasks:
+  - id: load_companies_by_tag
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install --quiet "dlt[postgres]" requests
+    env:
+      # relational_db (pgvector/postgres) from app/docker-compose.yml, reached via
+      # its host-mapped port since it lives in a separate compose project/network.
+      DESTINATION__POSTGRES__CREDENTIALS: "postgresql://postgres:postgres@host.docker.internal:5440/postgres"
+    script: |
+      import dlt
+      import requests
+
+      META_URL = "https://yc-oss.github.io/api/meta.json"
+
+
+      @dlt.source(name="yc_oss")
+      def yc_oss_source():
+          @dlt.resource(name="companies_by_tag", write_disposition="replace")
+          def companies_by_tag():
+              meta = requests.get(META_URL, timeout=30).json()
+              tags = meta["tags"]
+              total = len(tags)
+              for i, (tag_slug, tag_info) in enumerate(tags.items(), start=1):
+                  print(f"[{i}/{total}] {tag_slug} -> {tag_info['api']}")
+                  companies = requests.get(tag_info["api"], timeout=30).json()
+                  for company in companies:
+                      yield {
+                          "tag_slug": tag_slug,
+                          "tag_name": tag_info["name"],
+                          **company,
+                      }
+
+          return companies_by_tag
+
+
+      pipeline = dlt.pipeline(
+          pipeline_name="yc_oss_tags",
+          destination="postgres",
+          dataset_name="yc_oss",
+      )
+
+      load_info = pipeline.run(yc_oss_source())
+      print(load_info)
+
+# triggers:
+#   - id: daily
+#     type: io.kestra.plugin.core.trigger.Schedule
+#     cron: "0 6 * * *"
+#     disabled: true
