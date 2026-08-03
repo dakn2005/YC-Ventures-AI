@@ -12,13 +12,14 @@ tasks:
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
+      networkMode: ventures_net
     containerImage: python:3.11-slim
     beforeCommands:
       - pip install --quiet "dlt[postgres]" requests
     env:
-      # relational_db (pgvector/postgres) from app/docker-compose.yml, reached via
-      # its host-mapped port since it lives in a separate compose project/network.
-      DESTINATION__POSTGRES__CREDENTIALS: "postgresql://postgres:postgres@host.docker.internal:5440/postgres"
+      # relational_db now shares the ventures_net network (app/docker-compose.yml
+      # includes kestra/docker-compose.yml), so we reach it by service name/internal port.
+      DESTINATION__POSTGRES__CREDENTIALS: "postgresql://postgres:postgres@relational_db:5432/postgres"
     script: |
       import dlt
       import requests

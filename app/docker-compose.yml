@@ -1,3 +1,15 @@
+include:
+  - kestra/docker-compose.yml
+
+volumes:
+  db_volume:
+    driver: local
+
+networks:
+  ventures_net:
+    name: ventures_net
+    driver: bridge
+
 services:
   relational_db:
       image: pgvector/pgvector:pg16
@@ -10,7 +22,6 @@ services:
         - db_volume:/var/lib/postgresql/data
       ports:
         - "5440:5432"
-
-volumes:
-  db_volume:
+      networks:
+        - ventures_net
 
