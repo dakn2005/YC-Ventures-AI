@@ -1,10 +1,13 @@
 id: yc_oss_to_ventures_db
 namespace: ventures
+labels:
+  name: YC OSS data to DB
 description: |
-  Downstream of yc_oss_companies_by_tag. Walks meta.json -> tags -> each tag's api
-  link (same source that flow reads), de-duplicates companies by id, and upserts
-  the selected fields into Postgres database `ventures_db`, table `yc_oss`
-  (created if it doesn't exist), reached via relational_db:5432 on ventures_net.
+  Downstream of yc_oss_companies_by_tag. Reads the de-duplicated companies.json that
+  flow's load_companies_by_tag task wrote to its outputFiles (via trigger.outputs, no
+  re-fetch from the API) and upserts the selected fields into Postgres database
+  `ventures_db`, table `yc_oss` (created if it doesn't exist), reached via
+  relational_db:5432 on ventures_net.
 
 triggers:
   - id: after_companies_by_tag
@@ -54,15 +57,15 @@ tasks:
       networkMode: ventures_net
     containerImage: python:3.11-slim
     beforeCommands:
-      - pip install --quiet psycopg2-binary requests
+      - pip install --quiet psycopg2-binary
+    inputFiles:
+      companies.json: "{{ trigger.outputs.companies_file }}"
     script: |
+      import json
       from datetime import datetime, timezone
 
       import psycopg2
       import psycopg2.extras
-      import requests
-
-      META_URL = "https://yc-oss.github.io/api/meta.json"
 
       CREATE_TABLE_SQL = """
       CREATE TABLE IF NOT EXISTS yc_oss (
@@ -144,21 +147,11 @@ tasks:
           )
 
 
-      print("Fetching meta.json ...")
-      meta = requests.get(META_URL, timeout=30).json()
-      tags = meta["tags"]
-      total_tags = len(tags)
+      with open("companies.json") as f:
+          companies = json.load(f)
+      print(f"Loaded {len(companies)} companies from companies.json")
 
-      companies_by_id = {}
-      for i, (tag_slug, tag_info) in enumerate(tags.items(), start=1):
-          print(f"[{i}/{total_tags}] {tag_slug} -> {tag_info['api']}")
-          companies = requests.get(tag_info["api"], timeout=30).json()
-          for company in companies:
-              companies_by_id[company["id"]] = company
-
-      print(f"Collected {len(companies_by_id)} unique companies")
-
-      rows = [to_row(c) for c in companies_by_id.values()]
+      rows = [to_row(c) for c in companies]
 
       conn = psycopg2.connect(
           host="relational_db", port=5432,
@@ -173,3 +166,4 @@ tasks:
           conn.close()
 
       print(f"Upserted {len(rows)} rows into ventures_db.yc_oss")
+

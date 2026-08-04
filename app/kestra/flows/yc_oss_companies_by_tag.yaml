@@ -1,10 +1,14 @@
 id: yc_oss_companies_by_tag
 namespace: ventures
+labels:
+  name: Get data from YC OSS
 description: |
   Fetches https://yc-oss.github.io/api/meta.json, iterates every entry under `tags`,
   follows each tag's `api` link, and loads the resulting company records into
   Postgres via dlt. Each row is tagged with tag_slug / tag_name so a company that
-  appears under multiple tags is loaded once per tag.
+  appears under multiple tags is loaded once per tag. Also writes the de-duplicated
+  companies to companies.json (declared as outputFiles) so downstream flows can read
+  it via the Flow trigger's `trigger.outputs` instead of re-fetching from the API.
 
 tasks:
   - id: load_companies_by_tag
@@ -20,41 +24,52 @@ tasks:
       # relational_db now shares the ventures_net network (app/docker-compose.yml
       # includes kestra/docker-compose.yml), so we reach it by service name/internal port.
       DESTINATION__POSTGRES__CREDENTIALS: "postgresql://postgres:postgres@relational_db:5432/postgres"
+    outputFiles:
+      - companies.json
     script: |
+      import json
+
       import dlt
       import requests
 
       META_URL = "https://yc-oss.github.io/api/meta.json"
 
+      print("Fetching meta.json ...")
+      meta = requests.get(META_URL, timeout=30).json()
+      tags = meta["tags"]
+      total_tags = len(tags)
 
-      @dlt.source(name="yc_oss")
-      def yc_oss_source():
-          @dlt.resource(name="companies_by_tag", write_disposition="replace")
-          def companies_by_tag():
-              meta = requests.get(META_URL, timeout=30).json()
-              tags = meta["tags"]
-              total = len(tags)
-              for i, (tag_slug, tag_info) in enumerate(tags.items(), start=1):
-                  print(f"[{i}/{total}] {tag_slug} -> {tag_info['api']}")
-                  companies = requests.get(tag_info["api"], timeout=30).json()
-                  for company in companies:
-                      yield {
-                          "tag_slug": tag_slug,
-                          "tag_name": tag_info["name"],
-                          **company,
-                      }
+      tagged_rows = []
+      companies_by_id = {}
+      for i, (tag_slug, tag_info) in enumerate(tags.items(), start=1):
+          print(f"[{i}/{total_tags}] {tag_slug} -> {tag_info['api']}")
+          companies = requests.get(tag_info["api"], timeout=30).json()
+          for company in companies:
+              tagged_rows.append({
+                  "tag_slug": tag_slug,
+                  "tag_name": tag_info["name"],
+                  **company,
+              })
+              companies_by_id[company["id"]] = company
 
-          return companies_by_tag
-
+      print(f"Collected {len(tagged_rows)} tag rows across {len(companies_by_id)} unique companies")
 
       pipeline = dlt.pipeline(
           pipeline_name="yc_oss_tags",
           destination="postgres",
           dataset_name="yc_oss",
       )
-
-      load_info = pipeline.run(yc_oss_source())
+      load_info = pipeline.run(tagged_rows, table_name="companies_by_tag", write_disposition="replace")
       print(load_info)
+
+      with open("companies.json", "w") as f:
+          json.dump(list(companies_by_id.values()), f)
+      print(f"Wrote {len(companies_by_id)} unique companies to companies.json")
+
+outputs:
+  - id: companies_file
+    type: STRING
+    value: "{{ outputs.load_companies_by_tag.outputFiles['companies.json'] }}"
 
 # triggers:
 #   - id: daily
