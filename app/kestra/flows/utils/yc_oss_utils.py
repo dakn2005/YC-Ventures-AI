@@ -10,8 +10,8 @@ def build_title(row: dict) -> str:
 def build_content(row: dict) -> str:
   lines = []
 
-  if row.get("former_names"):
-    lines.append("Formerly known as: " + ", ".join(row["former_names"]))
+  # if row.get("former_names"):
+  #   lines.append("Formerly known as: " + ", ".join(row["former_names"]))
 
   if row.get("long_description"):
     lines.append(row["long_description"])

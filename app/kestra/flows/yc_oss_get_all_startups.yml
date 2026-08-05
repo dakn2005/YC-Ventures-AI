@@ -1,4 +1,4 @@
-id: yc_oss_get_startups
+id: yc_oss_get_all_startups
 namespace: ventures
 labels:
   name: Get data from YC OSS
@@ -50,14 +50,14 @@ tasks:
       load_info = pipeline.run(companies, table_name="companies", write_disposition="replace")
       print(load_info)
 
-      with open("companies.json", "w") as f:
+      with open("all_companies.json", "w") as f:
           json.dump(companies, f)
       print(f"Wrote {len(companies)} companies to companies.json")
 
 outputs:
-  - id: companies_file
+  - id: all_companies_file
     type: STRING
-    value: "{{ outputs.load_companies.outputFiles['companies.json'] }}"
+    value: "{{ outputs.load_companies.outputFiles['all_companies_file.json'] }}"
 
 # triggers:
 #   - id: daily

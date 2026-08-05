@@ -1,7 +1,7 @@
-id: yc_oss_to_ventures_db
+id: yc_oss_to_ventures_all_db
 namespace: ventures
 labels:
-  name: YC OSS data to DB
+  name: YC OSS All data to DB
 description: |
   Downstream of yc_oss_get_startups. Reads the companies.json that flow's
   load_companies task wrote to its outputFiles (via trigger.outputs, no re-fetch
@@ -19,7 +19,7 @@ triggers:
       - type: io.kestra.plugin.core.condition.ExecutionFlowCondition
         namespace: ventures
         # flowId: yc_oss_get_startups
-        flowId: yc_oss_companies_by_tag
+        flowId: yc_oss_get_all_startups
 
 tasks:
   # db_volume already holds an initialized cluster (POSTGRES_DB=postgres ran on first
@@ -60,7 +60,7 @@ tasks:
     beforeCommands:
       - pip install --quiet psycopg2-binary
     inputFiles:
-      companies.json: "{{ trigger.outputs.companies_file }}"
+      companies.json: "{{ trigger.outputs.all_companies_file }}"
     script: |
       import json
       from datetime import datetime, timezone
@@ -69,7 +69,7 @@ tasks:
       import psycopg2.extras
 
       CREATE_TABLE_SQL = """
-      CREATE TABLE IF NOT EXISTS yc_oss (
+      CREATE TABLE IF NOT EXISTS yc_oss_all (
           id BIGINT PRIMARY KEY,
           name TEXT,
           former_names TEXT[],
@@ -92,7 +92,7 @@ tasks:
       """
 
       UPSERT_SQL = """
-      INSERT INTO yc_oss (
+      INSERT INTO yc_oss_all (
           id, name, former_names, locations, long_description, one_liner,
           tags, industries, subindustry, is_hiring, top_company, non_profit,
           team_size, regions, stage, launched_at, batch, status

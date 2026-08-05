@@ -4,15 +4,18 @@ labels:
   name: YC OSS embeddings
 
 description: |
-  Downstream of yc_oss_to_fulltext. Reads company_id/title/content from
-  yc_oss_fulltext (no re-fetch from the API or yc_oss), chunks each company's
-  `content` into fixed-size, non-overlapping windows (size=500, step=500),
-  embeds each chunk with SentenceTransformer('all-MiniLM-L6-v2') (384-dim,
-  matches the embedding vector(384) column), and loads the result into
-  yc_oss_embeddings for pgvector cosine similarity search (HNSW index).
+  Downstream of yc_oss_to_ventures_db (independent of yc_oss_to_fulltext -- both
+  are siblings that rebuild their own title/content from yc_oss). Reads every
+  row from yc_oss, rebuilds title/content per company via yc_oss_utils'
+  build_title/build_content (the same namespace-file helpers yc_oss_to_fulltext
+  uses), chunks each company's content into fixed-size, non-overlapping windows
+  (size=500, step=500), embeds each chunk with
+  SentenceTransformer('all-MiniLM-L6-v2') (384-dim, matches the embedding
+  vector(384) column), and loads the result into yc_oss_embeddings for pgvector
+  cosine similarity search (HNSW index).
 
 triggers:
-  - id: after_fulltext
+  - id: after_saving_ventures_db
     type: io.kestra.plugin.core.trigger.Flow
     conditions:
       - type: io.kestra.plugin.core.condition.ExecutionStatusCondition
@@ -20,7 +23,7 @@ triggers:
           - SUCCESS
       - type: io.kestra.plugin.core.condition.ExecutionFlowCondition
         namespace: ventures
-        flowId: yc_oss_to_fulltext
+        flowId: yc_oss_to_ventures_db
 
 tasks:
   - id: load_embeddings
@@ -30,12 +33,15 @@ tasks:
       pullPolicy: IF_NOT_PRESENT
       networkMode: ventures_net
     containerImage: python:3.11-slim
+    namespaceFiles:
+      enabled: true
     beforeCommands:
       - pip install --quiet psycopg2-binary sentence-transformers
     script: |
       import psycopg2
       import psycopg2.extras
       from sentence_transformers import SentenceTransformer
+      from yc_oss_utils import build_title, build_content
 
       CREATE_TABLE_SQL = """
       CREATE TABLE IF NOT EXISTS public.yc_oss_embeddings (
@@ -65,7 +71,12 @@ tasks:
           ON public.yc_oss_embeddings USING hnsw (embedding vector_cosine_ops)
       """
 
-      SELECT_SQL = "SELECT company_id, title, content FROM yc_oss_fulltext"
+      SELECT_SQL = """
+      SELECT id, name, former_names, locations, long_description, one_liner,
+             tags, industries, subindustry, is_hiring, top_company, non_profit,
+             team_size, regions, stage, launched_at, batch, status
+      FROM yc_oss
+      """
 
       INSERT_SQL = "INSERT INTO yc_oss_embeddings (company_id, title, content, embedding) VALUES %s"
       INSERT_TEMPLATE = "(%s, %s, %s, %s::vector)"
@@ -101,12 +112,14 @@ tasks:
           with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
               cur.execute(SELECT_SQL)
               companies = cur.fetchall()
-          print(f"Loaded {len(companies)} companies from yc_oss_fulltext")
+          print(f"Loaded {len(companies)} companies from yc_oss")
 
           document_chunks = []
           for company in companies:
-              for chunk in chunk_text(company["content"]):
-                  document_chunks.append((company["company_id"], company["title"], chunk))
+              title = build_title(company)
+              content = build_content(company)
+              for chunk in chunk_text(content):
+                  document_chunks.append((company["id"], title, chunk))
           print(f"Produced {len(document_chunks)} chunks (size={CHUNK_SIZE}, step={CHUNK_STEP})")
 
           print("Loading SentenceTransformer model (all-MiniLM-L6-v2) ...")
@@ -117,7 +130,7 @@ tasks:
           for i in range(0, len(texts), BATCH_SIZE):
               batch = texts[i:i + BATCH_SIZE]
               vectors.extend(model.encode(batch))
-              print(f"Embedded {min(i + BATCH_SIZE, len(texts))}/{len(texts)} chunks")
+            #   print(f"Embedded {min(i + BATCH_SIZE, len(texts))}/{len(texts)} chunks")
 
           rows = [
               (company_id, title, chunk, vec_to_str(vector))
