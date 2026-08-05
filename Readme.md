@@ -48,9 +48,9 @@ This starts up the app and exposes port 8000 for querying with the chatbot on th
 
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["YC-OSS API<br/>meta.json + tag APIs"] -->|dlt / requests| B[("Postgres<br/>ventures_db.yc_oss")]
-    B -->|read rows| C["Vectorization<br/>• Chunking<br/>• sentence-transformers embeddings"]
+    B -->|read rows| C["• Vectorization<br/>• Chunking<br/>• Sentence-transformers embeddings"]
     C -->|store vectors| D[("Vector Store<br/>pgvector")]
 
     subgraph RAG["RAG Retrieval"]

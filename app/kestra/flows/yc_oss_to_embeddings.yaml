@@ -1,0 +1,138 @@
+id: yc_oss_to_embeddings
+namespace: ventures
+labels:
+  name: YC OSS embeddings
+
+description: |
+  Downstream of yc_oss_to_fulltext. Reads company_id/title/content from
+  yc_oss_fulltext (no re-fetch from the API or yc_oss), chunks each company's
+  `content` into fixed-size, non-overlapping windows (size=500, step=500),
+  embeds each chunk with SentenceTransformer('all-MiniLM-L6-v2') (384-dim,
+  matches the embedding vector(384) column), and loads the result into
+  yc_oss_embeddings for pgvector cosine similarity search (HNSW index).
+
+triggers:
+  - id: after_fulltext
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionStatusCondition
+        in:
+          - SUCCESS
+      - type: io.kestra.plugin.core.condition.ExecutionFlowCondition
+        namespace: ventures
+        flowId: yc_oss_to_fulltext
+
+tasks:
+  - id: load_embeddings
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      networkMode: ventures_net
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install --quiet psycopg2-binary sentence-transformers
+    script: |
+      import psycopg2
+      import psycopg2.extras
+      from sentence_transformers import SentenceTransformer
+
+      CREATE_TABLE_SQL = """
+      CREATE TABLE IF NOT EXISTS public.yc_oss_embeddings (
+          id SERIAL PRIMARY KEY,
+          company_id BIGINT NOT NULL,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          embedding vector(384)
+      )
+      """
+
+      ADD_FK_SQL = """
+      DO $$
+      BEGIN
+          IF NOT EXISTS (
+              SELECT 1 FROM pg_constraint WHERE conname = 'yc_oss_embeddings_company_id_fkey'
+          ) THEN
+              ALTER TABLE public.yc_oss_embeddings
+                  ADD CONSTRAINT yc_oss_embeddings_company_id_fkey
+                  FOREIGN KEY (company_id) REFERENCES public.yc_oss(id) ON DELETE CASCADE;
+          END IF;
+      END $$;
+      """
+
+      CREATE_INDEX_SQL = """
+      CREATE INDEX IF NOT EXISTS yc_oss_embeddings_embedding_hnsw_idx
+          ON public.yc_oss_embeddings USING hnsw (embedding vector_cosine_ops)
+      """
+
+      SELECT_SQL = "SELECT company_id, title, content FROM yc_oss_fulltext"
+
+      INSERT_SQL = "INSERT INTO yc_oss_embeddings (company_id, title, content, embedding) VALUES %s"
+      INSERT_TEMPLATE = "(%s, %s, %s, %s::vector)"
+
+      CHUNK_SIZE = 500
+      CHUNK_STEP = 500
+      BATCH_SIZE = 50
+
+
+      def chunk_text(text: str, size: int = CHUNK_SIZE, step: int = CHUNK_STEP) -> list:
+          return [
+              text[start:start + size]
+              for start in range(0, len(text), step)
+              if text[start:start + size]
+          ]
+
+
+      def vec_to_str(vector) -> str:
+          return "[" + ",".join(str(x) for x in vector) + "]"
+
+
+      conn = psycopg2.connect(
+          host="relational_db", port=5432,
+          dbname="ventures_db", user="postgres", password="postgres",
+      )
+      try:
+          with conn.cursor() as cur:
+              cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+              cur.execute(CREATE_TABLE_SQL)
+              cur.execute(ADD_FK_SQL)
+          conn.commit()
+
+          with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+              cur.execute(SELECT_SQL)
+              companies = cur.fetchall()
+          print(f"Loaded {len(companies)} companies from yc_oss_fulltext")
+
+          document_chunks = []
+          for company in companies:
+              for chunk in chunk_text(company["content"]):
+                  document_chunks.append((company["company_id"], company["title"], chunk))
+          print(f"Produced {len(document_chunks)} chunks (size={CHUNK_SIZE}, step={CHUNK_STEP})")
+
+          print("Loading SentenceTransformer model (all-MiniLM-L6-v2) ...")
+          model = SentenceTransformer("all-MiniLM-L6-v2")
+
+          texts = [c[2] for c in document_chunks]
+          vectors = []
+          for i in range(0, len(texts), BATCH_SIZE):
+              batch = texts[i:i + BATCH_SIZE]
+              vectors.extend(model.encode(batch))
+              print(f"Embedded {min(i + BATCH_SIZE, len(texts))}/{len(texts)} chunks")
+
+          rows = [
+              (company_id, title, chunk, vec_to_str(vector))
+              for (company_id, title, chunk), vector in zip(document_chunks, vectors)
+          ]
+
+          with conn.cursor() as cur:
+              cur.execute("DELETE FROM yc_oss_embeddings")
+              psycopg2.extras.execute_values(cur, INSERT_SQL, rows, template=INSERT_TEMPLATE, page_size=500)
+          conn.commit()
+
+          with conn.cursor() as cur:
+              cur.execute(CREATE_INDEX_SQL)
+          conn.commit()
+      finally:
+          conn.close()
+
+      print(f"Loaded {len(rows)} embedding rows into ventures_db.yc_oss_embeddings")

@@ -1,0 +1,66 @@
+id: yc_oss_get_startups
+namespace: ventures
+labels:
+  name: Get data from YC OSS
+description: |
+  Fetches https://yc-oss.github.io/api/meta.json, reads the `companies.all` entry
+  (the complete, already-deduplicated list of every launched YC company), follows
+  its `api` link, and loads the resulting company records into Postgres via dlt.
+  Also writes the companies to companies.json (declared as outputFiles) so
+  downstream flows can read it via the Flow trigger's `trigger.outputs` instead of
+  re-fetching from the API.
+
+tasks:
+  - id: load_companies
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      networkMode: ventures_net
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install --quiet "dlt[postgres]" requests
+    env:
+      # relational_db now shares the ventures_net network (app/docker-compose.yml
+      # includes kestra/docker-compose.yml), so we reach it by service name/internal port.
+      DESTINATION__POSTGRES__CREDENTIALS: "postgresql://postgres:postgres@relational_db:5432/postgres"
+    outputFiles:
+      - companies.json
+    script: |
+      import json
+
+      import dlt
+      import requests
+
+      META_URL = "https://yc-oss.github.io/api/meta.json"
+
+      print("Fetching meta.json ...")
+      meta = requests.get(META_URL, timeout=30).json()
+      companies_api = meta["companies"]["all"]["api"]
+
+      print(f"Fetching companies -> {companies_api}")
+      companies = requests.get(companies_api, timeout=30).json()
+      print(f"Collected {len(companies)} companies")
+
+      pipeline = dlt.pipeline(
+          pipeline_name="yc_oss_companies",
+          destination="postgres",
+          dataset_name="yc_oss",
+      )
+      load_info = pipeline.run(companies, table_name="companies", write_disposition="replace")
+      print(load_info)
+
+      with open("companies.json", "w") as f:
+          json.dump(companies, f)
+      print(f"Wrote {len(companies)} companies to companies.json")
+
+outputs:
+  - id: companies_file
+    type: STRING
+    value: "{{ outputs.load_companies.outputFiles['companies.json'] }}"
+
+# triggers:
+#   - id: daily
+#     type: io.kestra.plugin.core.trigger.Schedule
+#     cron: "0 6 * * *"
+#     disabled: true

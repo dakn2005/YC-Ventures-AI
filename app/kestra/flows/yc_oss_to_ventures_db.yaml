@@ -3,14 +3,14 @@ namespace: ventures
 labels:
   name: YC OSS data to DB
 description: |
-  Downstream of yc_oss_companies_by_tag. Reads the de-duplicated companies.json that
-  flow's load_companies_by_tag task wrote to its outputFiles (via trigger.outputs, no
-  re-fetch from the API) and upserts the selected fields into Postgres database
+  Downstream of yc_oss_get_startups. Reads the companies.json that flow's
+  load_companies task wrote to its outputFiles (via trigger.outputs, no re-fetch
+  from the API) and upserts the selected fields into Postgres database
   `ventures_db`, table `yc_oss` (created if it doesn't exist), reached via
   relational_db:5432 on ventures_net.
 
 triggers:
-  - id: after_companies_by_tag
+  - id: after_get_startups
     type: io.kestra.plugin.core.trigger.Flow
     conditions:
       - type: io.kestra.plugin.core.condition.ExecutionStatusCondition
@@ -18,7 +18,7 @@ triggers:
           - SUCCESS
       - type: io.kestra.plugin.core.condition.ExecutionFlowCondition
         namespace: ventures
-        flowId: yc_oss_companies_by_tag
+        flowId: yc_oss_get_startups
 
 tasks:
   # db_volume already holds an initialized cluster (POSTGRES_DB=postgres ran on first
