@@ -1,10 +1,8 @@
 INSTRUCTIONS = '''
-Your task is to answer questions from the course participants
-based on the provided context.
-
-Use the context to find relevant information and provide accurate
-answers. If the answer is not found in the context,
-respond with "I don't know."
+Use the context to give a summary of the identified companies in the context in poetic english (shakespearian).
+Start with the top of the list as the best fit, going down the list.
+If the answer is not found within the context, respond with "I haven't found a company satisfying the query" in poetic english.
+Also suggest other questions/queries
 '''
 
 PROMPT_TEMPLATE = '''
@@ -21,6 +19,7 @@ class RAGBase:
         self,
         index,
         llm_client,
+        llm_client_local=None,
         instructions=INSTRUCTIONS,
         prompt_template=PROMPT_TEMPLATE,
         course='llm-zoomcamp',
@@ -28,35 +27,21 @@ class RAGBase:
     ):
         self.index = index
         self.llm_client = llm_client
+        self.llm_client_local = llm_client_local
         self.instructions = instructions
         self.course = course
         self.prompt_template = prompt_template
         self.model = model
 
-    # def search(self, query, num_results=5):
-    #     boost_dict = {'question': 3.0, 'section': 0.5}
-    #     filter_dict = {'course': self.course}
-
-    #     return self.index.search(
-    #         query,
-    #         num_results=num_results,
-    #         boost_dict=boost_dict,
-    #         filter_dict=filter_dict
-    #     )
-
-    def build_context(self, search_results):
+    def build_prompt(self, query, search_results):
+        context = '' #self.build_context(search_results)
         lines = []
 
-        for doc in search_results:
-            lines.append(doc['section'])
-            lines.append('Q: ' + doc['question'])
-            lines.append('A: ' + doc['answer'])
-            lines.append('')
+        for company_rec in search_results:
+            lines.append(f'company: {company_rec['title']}. description: {company_rec['content']}')
 
-        return '\n'.join(lines).strip()
+        context = '\n'.join(lines).strip()
 
-    def build_prompt(self, query, search_results):
-        context = self.build_context(search_results)
         return self.prompt_template.format(
             question=query, context=context
         )
@@ -67,15 +52,27 @@ class RAGBase:
             {'role': 'user', 'content': prompt}
         ]
 
-        response = self.llm_client.responses.create(
-            model=self.model,
-            input=input_messages
-        )
+        if self.llm_client_local:
+            response = self.llm_client_local.chat(
+                model=self.model,
+                input=input_messages
+            )
+        else:
+            response = self.llm_client.responses.create(
+                model=self.model,
+                input=input_messages
+            )
 
         return response.output_text
 
-    def rag(self, query):
-        search_results = self.search(query)
+    def rag(self, query, search_results: list[dict]):
         prompt = self.build_prompt(query, search_results)
+
+        # print(prompt)
+
         answer = self.llm(prompt)
+
         return answer
+
+    
+

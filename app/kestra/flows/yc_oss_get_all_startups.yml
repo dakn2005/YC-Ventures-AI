@@ -25,7 +25,7 @@ tasks:
       # includes kestra/docker-compose.yml), so we reach it by service name/internal port.
       DESTINATION__POSTGRES__CREDENTIALS: "postgresql://postgres:postgres@relational_db:5432/postgres"
     outputFiles:
-      - companies.json
+      - all_companies.json
     script: |
       import json
 
@@ -52,12 +52,12 @@ tasks:
 
       with open("all_companies.json", "w") as f:
           json.dump(companies, f)
-      print(f"Wrote {len(companies)} companies to companies.json")
+      print(f"Wrote {len(companies)} companies to all_companies.json")
 
 outputs:
   - id: all_companies_file
     type: STRING
-    value: "{{ outputs.load_companies.outputFiles['all_companies_file.json'] }}"
+    value: "{{ outputs.load_companies.outputFiles['all_companies.json'] }}"
 
 # triggers:
 #   - id: daily
