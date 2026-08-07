@@ -8,8 +8,10 @@ description: |
   are siblings that rebuild their own title/content from yc_oss). Reads every
   row from yc_oss, rebuilds title/content per company via yc_oss_utils'
   build_title/build_content (the same namespace-file helpers yc_oss_to_fulltext
-  uses), chunks each company's content into fixed-size, non-overlapping windows
-  (size=500, step=500), embeds each chunk with
+  uses), processes companies in batches (BATCH_SIZE=50): each batch is chunked
+  as a group of documents into fixed-size, non-overlapping windows (size=500,
+  step=500) -- chunks never span two companies, BATCH_SIZE only groups
+  documents together for one model.encode() call -- embeds each chunk with
   SentenceTransformer('all-MiniLM-L6-v2') (384-dim, matches the embedding
   vector(384) column), and loads the result into yc_oss_embeddings for pgvector
   cosine similarity search (HNSW index).
@@ -86,12 +88,22 @@ tasks:
       BATCH_SIZE = 50
 
 
-      def chunk_text(text: str, size: int = CHUNK_SIZE, step: int = CHUNK_STEP) -> list:
-          return [
-              text[start:start + size]
-              for start in range(0, len(text), step)
-              if text[start:start + size]
-          ]
+      def chunk_documents(documents: list, size: int = CHUNK_SIZE, step: int = CHUNK_STEP) -> list:
+          # Chunks are windowed per-document, never spanning two companies --
+          # BATCH_SIZE only groups documents together for one model.encode() call.
+          chunks = []
+          for doc in documents:
+              content = doc["content"]
+              for start in range(0, len(content), step):
+                  chunk_content = content[start:start + size]
+                  if not chunk_content:
+                      continue
+                  chunks.append({
+                      "company_id": doc["company_id"],
+                      "title": doc["title"],
+                      "content": chunk_content,
+                  })
+          return chunks
 
 
       def vec_to_str(vector) -> str:
@@ -114,28 +126,36 @@ tasks:
               companies = cur.fetchall()
           print(f"Loaded {len(companies)} companies from yc_oss")
 
-          document_chunks = []
-          for company in companies:
-              title = build_title(company)
-              content = build_content(company)
-              for chunk in chunk_text(content):
-                  document_chunks.append((company["id"], title, chunk))
-          print(f"Produced {len(document_chunks)} chunks (size={CHUNK_SIZE}, step={CHUNK_STEP})")
-
           print("Loading SentenceTransformer model (all-MiniLM-L6-v2) ...")
           model = SentenceTransformer("all-MiniLM-L6-v2")
 
-          texts = [c[2] for c in document_chunks]
-          vectors = []
-          for i in range(0, len(texts), BATCH_SIZE):
-              batch = texts[i:i + BATCH_SIZE]
-              vectors.extend(model.encode(batch))
-            #   print(f"Embedded {min(i + BATCH_SIZE, len(texts))}/{len(texts)} chunks")
+          rows = []
+          for i in range(0, len(companies), BATCH_SIZE):
+              batch_companies = companies[i:i + BATCH_SIZE]
+              documents = [
+                  {
+                      "company_id": company["id"],
+                      "title": build_title(company),
+                      "content": build_content(company),
+                  }
+                  for company in batch_companies
+              ]
 
-          rows = [
-              (company_id, title, chunk, vec_to_str(vector))
-              for (company_id, title, chunk), vector in zip(document_chunks, vectors)
-          ]
+              # batch_chunks = chunk_documents(documents)
+              # texts = [chunk["content"] for chunk in batch_chunks]
+              texts = [d["content"] for d in documents]
+              vectors = model.encode(texts)
+
+              # rows.extend(
+              #     (chunk["company_id"], chunk["title"], chunk["content"], vec_to_str(vector))
+              #     for chunk, vector in zip(batch_chunks, vectors)
+              # )
+              rows.extend(
+                  (d["company_id"], d["title"], d["content"], vec_to_str(vector))
+                  for d, vector in zip(documents, vectors)
+              )
+
+          print(f"Produced {len(rows)} chunks across {len(companies)} companies (batch_size={BATCH_SIZE}, chunk_size={CHUNK_SIZE}, chunk_step={CHUNK_STEP})")
 
           with conn.cursor() as cur:
               cur.execute("DELETE FROM yc_oss_embeddings")

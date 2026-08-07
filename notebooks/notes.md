@@ -1,0 +1,3 @@
+- Touch on general search, which outputs multiple answers vs specialized search, requiring single answers
+- Touch on qualitative (what does..) vs quantitative search (how many..)
+- User feedback collection

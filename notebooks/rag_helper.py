@@ -1,7 +1,7 @@
 INSTRUCTIONS = '''
 Use the context to give a summary of the identified companies in the context in poetic english (shakespearian).
 Start with the top of the list as the best fit, going down the list.
-If the answer is not found within the context, respond with "I haven't found a company satisfying the query" in poetic english.
+If the context is empty i.e. empty array, respond with "I haven't found a company satisfying the query" in poetic english.
 Also suggest other questions/queries
 '''
 
@@ -18,7 +18,7 @@ class RAGBase:
     def __init__(
         self,
         index,
-        llm_client,
+        llm_client=None,
         llm_client_local=None,
         instructions=INSTRUCTIONS,
         prompt_template=PROMPT_TEMPLATE,
@@ -55,7 +55,7 @@ class RAGBase:
         if self.llm_client_local:
             response = self.llm_client_local.chat(
                 model=self.model,
-                input=input_messages
+                messages=input_messages
             )
         else:
             response = self.llm_client.responses.create(
