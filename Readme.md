@@ -81,29 +81,49 @@ flowchart TD
 ### Ingestion Pipeline
 Tools: Kestra, DLT, Postgres
 
+```mermaid
+flowchart LR
+    A["flow: yc_oss_companies_by_tag\n(gets records)"] --> B["flow: yc_oss_to_ventures_db\n(saves to yc_oss table)"]
+    B --> C["flow: yc_oss_to_fulltext\n(saves to yc_oss_fulltext table)"]
+    B --> D["flow: yc_oss_to_embeddings\n(saves to yc_oss_embeddings table)"]
+    C --> E["flow: yc_oss_to_sample_records\n(saves to records table)\n(creates llm_evals table)"]
+    D --> E
+
+    classDef flow fill:#0969da,color:#ffffff,stroke:#0969da,stroke-width:1px;
+    class A,B,C,D,E flow;
+```
+`yc_oss_to_sample_records` only fires once **both** `yc_oss_to_fulltext` and `yc_oss_to_embeddings` have succ
+eeded (a multi-flow `preconditions` trigger), since it joins their outputs.
+
 For retrieval, Kestra is used as the Orchestration tool, with flows for retrieval from the yc-oss endpoint into postgres. 
 
-Kestra runs two flows
+Kestra runs the flows below
 
-[yc_oss_companies_by_tag](./app/kestra/flows/yc_oss_companies_by_tag.yaml)
+| flow | topology |
+|------|----------|
+| [yc_oss_companies_by_tag](./app/kestra/flows/yc_oss_companies_by_tag.yaml) | <img src="./flow-graph-api-retrieve.png" alt="api retrieval" width="300" height="350" /> |
+| [yc_oss_to_ventures_db](./app/kestra/flows/yc_oss_to_ventures_db.yaml) | <img src="./flow-graph-output_to_db.png" alt="retrieval output to db" width="300" height="350" /> |
+| [yc_oss_to_fulltext](./app/kestra/flows/yc_oss_to_fulltext.yaml) | <img src="./flow-graph-yc_oss_to_fulltext.png" alt="retrieval output to db" width="300" height="350" /> |
+| [yc_oss_to_embedding](./app/kestra/flows/yc_oss_to_embeddings.yaml) | <img src="./flow-graph-yc_oss_to_embeddings.png" alt="retrieval output to db" width="300" height="350" /> |
+| [yc_oss_to_sample_records](./app/kestra/flows/yc_oss_to_sample_records.yaml) | <img src="./flow-graph-yc_oss_to_sample_records.png" alt="retrieval output to db" width="250" height="350" /> |
 
-<!-- ![api retrieval](./flow-graph-api-retrieve.png){width=100px height=100px} -->
-<img src="./flow-graph-api-retrieve.png" alt="api retrieval" width="300" height="350" />
-
-[yc_oss_to_ventures_db](./app/kestra/flows/yc_oss_to_ventures_db.yaml)
-
+<!-- ![retrieval output to db](./flow-graph-api-retrieve.png) -->
 <!-- ![retrieval output to db](./flow-graph-output_to_db.png) -->
-<img src="./flow-graph-output_to_db.png" alt="retrieval output to db" width="300" height="350" />
 
 > Note - that for the db flow, we can use [DBT](https://www.getdbt.com/) tool for scaffolding database schema - especially useful if having none trivial schemas 
 
 
 ### LLM evaluation
-
+Using RAGAs to evaluate results, looking majorly into Faithfulness and Answer relevance
 
 ### Interface
+Chatting interface exposed via **chainlit**
+
+**Dashboard** - to access the dasboard, type /dashboard in the chainlit app chat interface
 
 ### Monitoring
+Using Pydantic logfire, with the pydantic Agent wrapped call to pgvector rag.
+Using Grafana to graph from the llm_evaluations table
 
 ### Conclusion
 

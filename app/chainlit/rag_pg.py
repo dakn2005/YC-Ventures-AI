@@ -125,6 +125,18 @@ class RAGPgVector:
         return f"{title}: {content}"
 
 
+def list_rooms() -> list[str]:
+    """Distinct room names seen so far, for suggesting existing rooms at chat start."""
+    sql = "SELECT DISTINCT room FROM llm_evaluations WHERE room IS NOT NULL ORDER BY room"
+    try:
+        with get_pool().connection() as conn:
+            rows = conn.execute(sql).fetchall()
+        return [r[0] for r in rows]
+    except Exception:
+        # llm_evaluations/room may not exist yet on a fresh DB -- don't block chat start.
+        return []
+
+
 @lru_cache(maxsize=1)
 def get_pool() -> ConnectionPool:
     pool = ConnectionPool(conninfo=CONNINFO, min_size=1, max_size=10, open=True)

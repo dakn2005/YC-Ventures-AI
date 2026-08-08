@@ -129,6 +129,7 @@ tasks:
           context_precision FLOAT null,
           context_recall FLOAT null,
           liked_disliked varchar(25) null,
+          room TEXT NOT NULL DEFAULT 'general',
           created_at TIMESTAMPTZ DEFAULT now()
       )
       """
@@ -137,7 +138,8 @@ tasks:
       ALTER TABLE llm_evaluations
           ADD COLUMN IF NOT EXISTS liked_disliked varchar(25),
           ADD COLUMN IF NOT EXISTS feedback_comment TEXT,
-          ADD COLUMN IF NOT EXISTS feedback_at TIMESTAMPTZ
+          ADD COLUMN IF NOT EXISTS feedback_at TIMESTAMPTZ,
+          ADD COLUMN IF NOT EXISTS room TEXT NOT NULL DEFAULT 'general'
       """
 
       conn = psycopg2.connect(

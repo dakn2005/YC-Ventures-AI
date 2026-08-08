@@ -10,13 +10,14 @@ from pydantic_ai.providers.ollama import OllamaProvider
 import dashboard
 import eval as ragas_eval
 import ground_truths
-from rag_pg import RAGPgVector, get_index, get_pool
+from rag_pg import RAGPgVector, get_index, get_pool, list_rooms
 
 logfire.configure()
 logfire.instrument_pydantic_ai()
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 DASHBOARD_TRIGGER = "__dashboard__"
+DEFAULT_ROOM = "general"
 
 INSTRUCTIONS = """
 You are an assistant answering questions about YC-backed startups using the `search` tool,
@@ -87,17 +88,29 @@ async def on_chat_start():
     profile = cl.user_session.get("chat_profile") or "GPT-5.4-mini (OpenAI)"
     provider = PROVIDER_BY_PROFILE.get(profile, "openai")
 
+    existing_rooms = list_rooms()
+    hint = f" Existing rooms: {', '.join(existing_rooms)}." if existing_rooms else ""
+    room_answer = await cl.AskUserMessage(
+        content=f"Which room would you like to join?{hint} Type a name, or press enter for '{DEFAULT_ROOM}'.",
+        timeout=120,
+    ).send()
+    room = (room_answer.get("output") or "").strip() if room_answer else ""
+    room = room or DEFAULT_ROOM
+
+    await cl.Message(content=f"🏠 Room: **{room}**").send()
+
     deps = SearchDeps(index=get_index())
     agent = build_agent(provider)
 
     cl.user_session.set("agent", agent)
     cl.user_session.set("deps", deps)
     cl.user_session.set("provider", provider)
+    cl.user_session.set("room", room)
 
 
 async def send_dashboard():
     figures = dashboard.build_dashboard_figures()
-    titles = ["Query volume", "Likes vs dislikes", "Faithfulness", "Relevance"]
+    titles = ["Query volume", "Likes vs dislikes", "Faithfulness", "Relevance", "Queries by room"]
     elements = [
         cl.Plotly(name=title, figure=fig, display="inline")
         for title, fig in zip(titles, figures)
@@ -116,6 +129,7 @@ async def on_message(message: cl.Message):
     agent: Agent = cl.user_session.get("agent")
     deps: SearchDeps = cl.user_session.get("deps")
     provider: str = cl.user_session.get("provider")
+    room: str = cl.user_session.get("room") or DEFAULT_ROOM
 
     deps.last_contexts = []
     result = await agent.run(text, deps=deps)
@@ -133,6 +147,7 @@ async def on_message(message: cl.Message):
         answer=answer,
         contexts=contexts,
         provider=provider,
+        room=room,
         reference=reference,
     )
 

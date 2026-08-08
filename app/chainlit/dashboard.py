@@ -32,6 +32,13 @@ GROUP BY 1
 ORDER BY 1
 """
 
+ROOMS_SQL = """
+SELECT coalesce(room, 'general') AS room, count(*) AS queries
+FROM llm_evaluations
+GROUP BY 1
+ORDER BY 2 DESC
+"""
+
 
 def _fetch_df(sql: str) -> pd.DataFrame:
     pool = get_pool()
@@ -61,4 +68,7 @@ def build_dashboard_figures() -> list:
     )
     fig_relevance.update_yaxes(range=[0, 1])
 
-    return [fig_volume, fig_feedback, fig_faithfulness, fig_relevance]
+    rooms_df = _fetch_df(ROOMS_SQL)
+    fig_rooms = px.bar(rooms_df, x="room", y="queries", title="Queries by room")
+
+    return [fig_volume, fig_feedback, fig_faithfulness, fig_relevance, fig_rooms]
