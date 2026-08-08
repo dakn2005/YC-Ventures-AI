@@ -25,3 +25,25 @@ services:
       networks:
         - ventures_net
 
+  chainlit:
+      build:
+        context: ./chainlit
+      restart: always
+      env_file:
+        - .env
+      environment:
+        - OLLAMA_BASE_URL=http://host.docker.internal:11434
+        - POSTGRES_HOST=relational_db
+        - POSTGRES_PORT=5432
+        - POSTGRES_DB=ventures_db
+        - POSTGRES_USER=postgres
+        - POSTGRES_PASSWORD=postgres
+      ports:
+        - "8000:8000"
+      networks:
+        - ventures_net
+      depends_on:
+        - relational_db
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+

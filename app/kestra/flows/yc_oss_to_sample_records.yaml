@@ -128,8 +128,16 @@ tasks:
           answer_relevancy FLOAT,
           context_precision FLOAT null,
           context_recall FLOAT null,
+          liked_disliked varchar(25) null,
           created_at TIMESTAMPTZ DEFAULT now()
       )
+      """
+
+      ADD_FEEDBACK_COLUMNS_SQL = """
+      ALTER TABLE llm_evaluations
+          ADD COLUMN IF NOT EXISTS liked_disliked varchar(25),
+          ADD COLUMN IF NOT EXISTS feedback_comment TEXT,
+          ADD COLUMN IF NOT EXISTS feedback_at TIMESTAMPTZ
       """
 
       conn = psycopg2.connect(
@@ -139,7 +147,8 @@ tasks:
       try:
           with conn.cursor() as cur:
               cur.execute(CREATE_TABLE_SQL)
+              cur.execute(ADD_FEEDBACK_COLUMNS_SQL)
           conn.commit()
-          print("Ensured ventures_db.rag_evaluations exists")
+          print("Ensured ventures_db.llm_evaluations exists (incl. feedback columns)")
       finally:
           conn.close()
