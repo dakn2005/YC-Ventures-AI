@@ -32,8 +32,9 @@ PROVIDER_EMBEDDINGS = {"openai": _openai_embeddings, "ollama": _ollama_embedding
 INSERT_SQL = """
 INSERT INTO llm_evaluations
     (run_id, question, answer, contexts, ground_truth, llm_provider,
-     faithfulness, answer_relevancy, context_precision, context_recall, room)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+     faithfulness, answer_relevancy, context_precision, context_recall,
+     input_tokens, output_tokens)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 RETURNING id, run_id
 """
 
@@ -57,8 +58,9 @@ async def score_and_log(
     answer: str,
     contexts: list[dict],
     provider: str,
-    room: str,
     reference: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
 ) -> dict:
     context_strs = [f"{c['title']}: {c['content']}" for c in contexts]
 
@@ -94,7 +96,8 @@ async def score_and_log(
                 answer_relevancy,
                 context_precision,
                 context_recall,
-                room,
+                input_tokens,
+                output_tokens,
             ),
         ).fetchone()
         conn.commit()

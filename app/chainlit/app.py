@@ -10,14 +10,13 @@ from pydantic_ai.providers.ollama import OllamaProvider
 import dashboard
 import eval as ragas_eval
 import ground_truths
-from rag_pg import RAGPgVector, get_index, get_pool, list_rooms
+from rag_pg import RAGPgVector, company_title, get_index, get_pool
 
 logfire.configure()
 logfire.instrument_pydantic_ai()
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 DASHBOARD_TRIGGER = "__dashboard__"
-DEFAULT_ROOM = "general"
 
 INSTRUCTIONS = """
 You are an assistant answering questions about YC-backed startups using the `search` tool,
@@ -52,7 +51,7 @@ def build_agent(provider: str) -> Agent:
     @agent.tool
     def search(ctx: RunContext[SearchDeps], query: str) -> list[dict]:
         """Hybrid (keyword + vector) search over the YC-OSS company database."""
-        results = ctx.deps.index.hybrid_search(query)
+        results = ctx.deps.index.hybrid_search(query=query, num_recs=20)
         ctx.deps.last_contexts = results
         return results
 
@@ -75,10 +74,12 @@ async def chat_profiles():
 
 @cl.set_starters
 async def starters():
-    items = [
-        cl.Starter(label=q if len(q) <= 60 else q[:57] + "...", message=q)
-        for q in ground_truths.sample_starter_questions(4)
-    ]
+    items = []
+    for item in ground_truths.sample_starter_items(4):
+        name = company_title(item["company_id"]) or "This company"
+        text = f"{name}: {item['question']}"
+        label = text if len(text) <= 60 else text[:57] + "..."
+        items.append(cl.Starter(label=label, message=text))
     items.append(cl.Starter(label="📊 Dashboard", message=DASHBOARD_TRIGGER))
     return items
 
@@ -88,29 +89,17 @@ async def on_chat_start():
     profile = cl.user_session.get("chat_profile") or "GPT-5.4-mini (OpenAI)"
     provider = PROVIDER_BY_PROFILE.get(profile, "openai")
 
-    existing_rooms = list_rooms()
-    hint = f" Existing rooms: {', '.join(existing_rooms)}." if existing_rooms else ""
-    room_answer = await cl.AskUserMessage(
-        content=f"Which room would you like to join?{hint} Type a name, or press enter for '{DEFAULT_ROOM}'.",
-        timeout=120,
-    ).send()
-    room = (room_answer.get("output") or "").strip() if room_answer else ""
-    room = room or DEFAULT_ROOM
-
-    await cl.Message(content=f"🏠 Room: **{room}**").send()
-
     deps = SearchDeps(index=get_index())
     agent = build_agent(provider)
 
     cl.user_session.set("agent", agent)
     cl.user_session.set("deps", deps)
     cl.user_session.set("provider", provider)
-    cl.user_session.set("room", room)
 
 
 async def send_dashboard():
     figures = dashboard.build_dashboard_figures()
-    titles = ["Query volume", "Likes vs dislikes", "Faithfulness", "Relevance", "Queries by room"]
+    titles = ["Query volume", "Feedback", "Faithfulness", "Relevance"]
     elements = [
         cl.Plotly(name=title, figure=fig, display="inline")
         for title, fig in zip(titles, figures)
@@ -129,11 +118,12 @@ async def on_message(message: cl.Message):
     agent: Agent = cl.user_session.get("agent")
     deps: SearchDeps = cl.user_session.get("deps")
     provider: str = cl.user_session.get("provider")
-    room: str = cl.user_session.get("room") or DEFAULT_ROOM
 
     deps.last_contexts = []
     result = await agent.run(text, deps=deps)
     answer = result.output
+    input_tokens = result.usage.input_tokens
+    output_tokens = result.usage.output_tokens
 
     reply = cl.Message(content=answer)
     await reply.send()
@@ -147,13 +137,15 @@ async def on_message(message: cl.Message):
         answer=answer,
         contexts=contexts,
         provider=provider,
-        room=room,
         reference=reference,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
 
     reply.actions = [
         cl.Action(name="feedback_like", payload={"id": eval_row["id"]}, icon="thumbs-up", tooltip="Like"),
         cl.Action(name="feedback_dislike", payload={"id": eval_row["id"]}, icon="thumbs-down", tooltip="Dislike"),
+        cl.Action(name="feedback_love", payload={"id": eval_row["id"]}, icon="heart", tooltip="Love"),
     ]
     await reply.update()
 
@@ -178,3 +170,8 @@ async def on_feedback_like(action: cl.Action):
 @cl.action_callback("feedback_dislike")
 async def on_feedback_dislike(action: cl.Action):
     await _record_feedback(action, "DISLIKE")
+
+
+@cl.action_callback("feedback_love")
+async def on_feedback_love(action: cl.Action):
+    await _record_feedback(action, "LOVE")

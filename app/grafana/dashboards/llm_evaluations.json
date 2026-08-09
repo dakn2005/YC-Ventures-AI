@@ -31,7 +31,7 @@
     {
       "id": 2,
       "type": "barchart",
-      "title": "Likes vs dislikes",
+      "title": "Feedback",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "datasource": { "type": "postgres", "uid": "postgres_ventures" },
       "targets": [
@@ -79,18 +79,28 @@
       ]
     },
     {
-      "id": 5,
-      "type": "barchart",
-      "title": "Queries by room",
+      "id": 6,
+      "type": "timeseries",
+      "title": "Token usage over time",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
       "datasource": { "type": "postgres", "uid": "postgres_ventures" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",
-          "format": "table",
+          "format": "time_series",
           "rawQuery": true,
           "editorMode": "code",
-          "rawSql": "SELECT coalesce(room, 'general') AS room, count(*) AS queries FROM llm_evaluations GROUP BY 1 ORDER BY 2 DESC"
+          "rawSql": "SELECT $__timeGroupAlias(created_at, $__interval), sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens FROM llm_evaluations WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1"
         }
       ]
     }

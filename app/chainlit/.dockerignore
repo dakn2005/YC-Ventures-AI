@@ -2,6 +2,9 @@
 *.env
 __pycache__/
 *.pyc
-.chainlit/
+.chainlit/*
+!.chainlit/config.toml
+!.chainlit/translations
+!.chainlit/translations/en-US.json
 *.db
 .venv/

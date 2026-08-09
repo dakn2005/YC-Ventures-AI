@@ -125,16 +125,11 @@ class RAGPgVector:
         return f"{title}: {content}"
 
 
-def list_rooms() -> list[str]:
-    """Distinct room names seen so far, for suggesting existing rooms at chat start."""
-    sql = "SELECT DISTINCT room FROM llm_evaluations WHERE room IS NOT NULL ORDER BY room"
-    try:
-        with get_pool().connection() as conn:
-            rows = conn.execute(sql).fetchall()
-        return [r[0] for r in rows]
-    except Exception:
-        # llm_evaluations/room may not exist yet on a fresh DB -- don't block chat start.
-        return []
+def company_title(company_id: int) -> str | None:
+    sql = "SELECT title FROM yc_oss_fulltext WHERE company_id = %s LIMIT 1"
+    with get_pool().connection() as conn:
+        row = conn.execute(sql, (company_id,)).fetchone()
+    return row[0] if row else None
 
 
 @lru_cache(maxsize=1)

@@ -25,11 +25,19 @@ def _question_to_company_id() -> dict[str, int]:
 
 
 def company_id_for_question(question: str) -> int | None:
-    return _question_to_company_id().get(question)
+    lookup = _question_to_company_id()
+    if question in lookup:
+        return lookup[question]
+    # starters prefix the raw question with "<company name>: ", so a suffix
+    # match recovers the company_id for those (see app.py's starters()).
+    for raw_question, company_id in lookup.items():
+        if question.endswith(raw_question):
+            return company_id
+    return None
 
 
-def sample_starter_questions(n: int = 4) -> list[str]:
-    questions = list(_question_to_company_id().keys())
-    if not questions:
+def sample_starter_items(n: int = 4) -> list[dict]:
+    items = [{"question": q, "company_id": cid} for q, cid in _question_to_company_id().items()]
+    if not items:
         return []
-    return random.sample(questions, min(n, len(questions)))
+    return random.sample(items, min(n, len(items)))

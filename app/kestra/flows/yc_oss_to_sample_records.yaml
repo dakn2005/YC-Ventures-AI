@@ -129,7 +129,8 @@ tasks:
           context_precision FLOAT null,
           context_recall FLOAT null,
           liked_disliked varchar(25) null,
-          room TEXT NOT NULL DEFAULT 'general',
+          input_tokens INT null,
+          output_tokens INT null,
           created_at TIMESTAMPTZ DEFAULT now()
       )
       """
@@ -139,7 +140,8 @@ tasks:
           ADD COLUMN IF NOT EXISTS liked_disliked varchar(25),
           ADD COLUMN IF NOT EXISTS feedback_comment TEXT,
           ADD COLUMN IF NOT EXISTS feedback_at TIMESTAMPTZ,
-          ADD COLUMN IF NOT EXISTS room TEXT NOT NULL DEFAULT 'general'
+          ADD COLUMN IF NOT EXISTS input_tokens INT,
+          ADD COLUMN IF NOT EXISTS output_tokens INT
       """
 
       conn = psycopg2.connect(
