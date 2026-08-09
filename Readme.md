@@ -160,11 +160,10 @@ As summarised under _Hit Rate/MRR Interpretation_ section in the notebook, below
 ```mermaid
 flowchart TD
     A["YC-OSS API<br/>meta.json + tag APIs"] -->|dlt / requests| B[("Postgres<br/>ventures_db.yc_oss")]
-    B -->|read rows| C["• Vectorization<br/>• Chunking<br/>• Sentence-transformers embeddings"]
+    B -->|read rows| C["Vectorization<br/>Chunking<br/>Sentence-transformers embeddings"]
     C -->|store vectors| D[("Vector Store<br/>pgvector")]
 
     subgraph RAG["RAG Retrieval"]
-        direction LR
         Q["User Query"] --> QE["Embed Query<br/>sentence-transformers"]
         QE --> SIM["Similarity Search<br/>cosine / L2 on pgvector"]
         SIM --> TOPK["Top-K Retrieved<br/>company records"]
