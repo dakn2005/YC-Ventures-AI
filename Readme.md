@@ -165,8 +165,8 @@ flowchart TD
 
     subgraph RAG["RAG Retrieval"]
         Q["User Query"] --> QE["Embed Query<br/>sentence-transformers"]
-        QE --> SIM["Similarity Search<br/>cosine / L2 on pgvector"]
-        SIM --> TOPK["Top-K Retrieved<br/>company records"]
+        QE --> SIM["Similarity Search<br/>cosine similarity on pgvector and full-text tsrank"]
+        SIM --> TOPK["Top-K Retrieved<br/>company records - RRF document re-ranking"]
         TOPK --> CTX["Assemble Context<br/>rank + dedupe + truncate"]
     end
 
@@ -198,6 +198,10 @@ Chatting interface exposed via **chainlit** at [localhost:8000](http://localhost
 
 **Dashboard** - you can also view a simple static dasboard via chainlit; type /dashboard in the chainlit app chat interface
 
+Use low effort strategy to handle **User query rewriting** via a single line in the instructions `app > chainlit > app.py > INSTRUCTIONS`
+
+> Reformulate the user's question into an effective search query before calling search -> Always call search before answering. 
+
 ### Monitoring
 The app monitors at the agent level, using Pydantic logfire, with the pydantic Agent wrapped call to pgvector rag. This produces fine grained monitoring through the logfire dashboard
 
@@ -210,13 +214,12 @@ The app also uses **Grafana** to graph from the llm_evaluations table. We are gr
 ### Conclusion
 The app answers some questions on YCombinator startups, though working with limited context (limited to top 20 retrievals)
 
-The next steps would be building full agentic system that queries the full knowledgebase, integrating this with a graph knowledgebase for tighter semantic search 
+The next steps would be adding query caching, with it's own embedding layer. This would ensure quick answers for similar queries. 
+
+Also need to further investigate strategies of combing through a bigger context, i.e. other hybrid search strategies
 
 ### Acknowledgment
-This project was made possible thanks to:
-
-DataTalks.Club for the excellent LLM course facilitated Alexey Grigorev and the course instructors
-LLM community for support, discussions, and shared learning experiences
+This project was made possible thanks to *DataTalks.Club* for the excellent LLM course facilitated Alexey Grigorev and the course instructors, LLM community for support, discussions, and shared learning experiences
 
 ### AoB
 Now that you're here, check out my other projects on my [profile](https://github.com/dakn2005), and give a follow ;-)
