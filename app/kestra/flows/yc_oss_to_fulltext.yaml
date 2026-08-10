@@ -1,0 +1,102 @@
+id: yc_oss_to_fulltext
+namespace: ventures
+labels:
+  name: YC OSS full-text search table
+
+description: |
+  Downstream of yc_oss_to_ventures_db. Reads every row already loaded into
+  ventures_db.yc_oss (no re-fetch from the API), combines the descriptive
+  fields into title/content text per company, and upserts into
+  yc_oss_fulltext -- a table with a generated, stored tsvector column
+  (search_vector) for Postgres full-text search. This is the keyword-search
+  side of the hybrid search pipeline (paired later with pgvector similarity
+  search).
+
+triggers:
+  - id: after_saving_ventures_db
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionStatusCondition
+        in:
+          - SUCCESS
+      - type: io.kestra.plugin.core.condition.ExecutionFlowCondition
+        namespace: ventures
+        flowId: yc_oss_to_ventures_db
+
+tasks:
+  - id: load_fulltext
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      networkMode: ventures_net
+    containerImage: python:3.11-slim
+    namespaceFiles:
+      enabled: true
+    beforeCommands:
+      - pip install --quiet psycopg2-binary
+    script: |
+      import psycopg2
+      import psycopg2.extras
+      from yc_oss_utils import build_title, build_content
+
+      CREATE_TABLE_SQL = """
+      CREATE TABLE IF NOT EXISTS yc_oss_fulltext (
+          id SERIAL PRIMARY KEY,
+          company_id BIGINT NOT NULL UNIQUE REFERENCES yc_oss(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          search_vector tsvector GENERATED ALWAYS AS (
+              setweight(to_tsvector('english', COALESCE(title, '')), 'A') ||
+              setweight(to_tsvector('english', COALESCE(content, '')), 'B')
+          ) STORED
+      )
+      """
+
+      CREATE_INDEX_SQL = """
+      CREATE INDEX IF NOT EXISTS yc_oss_fulltext_search_idx
+          ON yc_oss_fulltext USING GIN (search_vector)
+      """
+
+      SELECT_SQL = """
+      SELECT id, name, former_names, locations, long_description, one_liner,
+             tags, industries, subindustry, is_hiring, top_company, non_profit,
+             team_size, regions, stage, launched_at, batch, status
+      FROM yc_oss
+      """
+
+      UPSERT_SQL = """
+      INSERT INTO yc_oss_fulltext (company_id, title, content)
+      VALUES %s
+      ON CONFLICT (company_id) DO UPDATE SET
+          title = EXCLUDED.title,
+          content = EXCLUDED.content
+      """
+
+      conn = psycopg2.connect(
+          host="relational_db", port=5432,
+          dbname="ventures_db", user="postgres", password="postgres",
+      )
+      try:
+          with conn.cursor() as cur:
+              cur.execute(CREATE_TABLE_SQL)
+              cur.execute(CREATE_INDEX_SQL)
+          conn.commit()
+
+          with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+              cur.execute(SELECT_SQL)
+              companies = cur.fetchall()
+          print(f"Loaded {len(companies)} companies from yc_oss")
+
+          rows = [
+              (company["id"], build_title(company), build_content(company))
+              for company in companies
+          ]
+
+          with conn.cursor() as cur:
+              psycopg2.extras.execute_values(cur, UPSERT_SQL, rows, page_size=500)
+          conn.commit()
+      finally:
+          conn.close()
+
+      print(f"Upserted {len(rows)} rows into ventures_db.yc_oss_fulltext")

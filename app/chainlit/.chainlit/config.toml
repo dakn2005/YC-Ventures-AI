@@ -1,0 +1,9 @@
+[UI]
+# Name of the assistant, shown in the app header.
+name = "Ventures AI"
+
+# Subtitle/description of the assistant. Used for the header and HTML meta tags.
+description = "Query Startups in the YC directory"
+
+[meta]
+generated_by = "2.11.1"

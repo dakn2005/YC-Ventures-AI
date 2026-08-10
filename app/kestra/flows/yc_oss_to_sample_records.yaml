@@ -1,0 +1,158 @@
+id: yc_oss_to_sample_records
+namespace: ventures
+labels:
+  name: YC OSS sample records
+
+description: |
+  Runs only after BOTH yc_oss_to_fulltext and yc_oss_to_embeddings succeed (multi-flow
+  preconditions trigger). Builds yc_oss_sample_records -- a ~10% random sample joining
+  yc_oss_fulltext (title/content + generated tsvector) with yc_oss_embeddings (vector),
+  one row per company, used by the notebook's RAGPgVector text_search/vector_search
+  methods when sampling=True.
+
+triggers:
+  - id: after_fulltext_and_embeddings
+    type: io.kestra.plugin.core.trigger.Flow
+    preconditions:
+      id: fulltext_and_embeddings
+      flows:
+        - namespace: ventures
+          flowId: yc_oss_to_fulltext
+          states: [SUCCESS]
+        - namespace: ventures
+          flowId: yc_oss_to_embeddings
+          states: [SUCCESS]
+
+tasks:
+  - id: load_sample_records
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      networkMode: ventures_net
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install --quiet psycopg2-binary
+    script: |
+      import psycopg2
+
+      CREATE_TABLE_SQL = """
+      CREATE TABLE IF NOT EXISTS public.yc_oss_sample_records (
+          id SERIAL PRIMARY KEY,
+          company_id BIGINT NOT NULL UNIQUE,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          embedding vector(384),
+          search_vector tsvector GENERATED ALWAYS AS (
+              setweight(to_tsvector('english', COALESCE(title, '')), 'A') ||
+              setweight(to_tsvector('english', COALESCE(content, '')), 'B')
+          ) STORED
+      )
+      """
+
+      CREATE_VECTOR_INDEX_SQL = """
+      CREATE INDEX IF NOT EXISTS yc_oss_sample_records_embedding_hnsw_idx
+          ON public.yc_oss_sample_records USING hnsw (embedding vector_cosine_ops)
+      """
+
+      CREATE_SEARCH_INDEX_SQL = """
+      CREATE INDEX IF NOT EXISTS yc_oss_sample_records_search_idx
+          ON public.yc_oss_sample_records USING gin (search_vector)
+      """
+
+      # yc_oss_embeddings has one row per chunk (several per company), but
+      # yc_oss_sample_records has UNIQUE(company_id) -- one row per company -- so we pick a
+      # single representative embedding per company (its first chunk) before joining.
+      INSERT_SQL = """
+      INSERT INTO yc_oss_sample_records (company_id, title, content, embedding)
+      SELECT
+          yt.company_id,
+          yt.title,
+          yt.content,
+          ye.embedding
+      FROM yc_oss_fulltext yt
+      JOIN (
+          SELECT DISTINCT ON (company_id) company_id, embedding
+          FROM yc_oss_embeddings
+          ORDER BY company_id, id
+      ) ye ON yt.company_id = ye.company_id
+      WHERE random() < 0.1
+      """
+
+      conn = psycopg2.connect(
+          host="relational_db", port=5432,
+          dbname="ventures_db", user="postgres", password="postgres",
+      )
+      try:
+          with conn.cursor() as cur:
+              cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+              cur.execute(CREATE_TABLE_SQL)
+          conn.commit()
+
+          with conn.cursor() as cur:
+              cur.execute("TRUNCATE TABLE yc_oss_sample_records RESTART IDENTITY")
+              cur.execute(INSERT_SQL)
+              row_count = cur.rowcount
+          conn.commit()
+          print(f"Inserted {row_count} rows into ventures_db.yc_oss_sample_records")
+
+          with conn.cursor() as cur:
+              cur.execute(CREATE_VECTOR_INDEX_SQL)
+              cur.execute(CREATE_SEARCH_INDEX_SQL)
+          conn.commit()
+      finally:
+          conn.close()
+
+  - id: create_rag_evaluations_table
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      networkMode: ventures_net
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install --quiet psycopg2-binary
+    script: |
+      import psycopg2
+
+      CREATE_TABLE_SQL = """
+      CREATE TABLE IF NOT EXISTS llm_evaluations (
+          id SERIAL PRIMARY KEY,
+          run_id UUID,
+          question TEXT,
+          answer TEXT,
+          contexts JSONB,
+          ground_truth TEXT,
+          llm_provider TEXT,        -- 'openai' or 'ollama'
+          faithfulness FLOAT,
+          answer_relevancy FLOAT,
+          context_precision FLOAT null,
+          context_recall FLOAT null,
+          liked_disliked varchar(25) null,
+          input_tokens INT null,
+          output_tokens INT null,
+          created_at TIMESTAMPTZ DEFAULT now()
+      )
+      """
+
+      ADD_FEEDBACK_COLUMNS_SQL = """
+      ALTER TABLE llm_evaluations
+          ADD COLUMN IF NOT EXISTS liked_disliked varchar(25),
+          ADD COLUMN IF NOT EXISTS feedback_comment TEXT,
+          ADD COLUMN IF NOT EXISTS feedback_at TIMESTAMPTZ,
+          ADD COLUMN IF NOT EXISTS input_tokens INT,
+          ADD COLUMN IF NOT EXISTS output_tokens INT
+      """
+
+      conn = psycopg2.connect(
+          host="relational_db", port=5432,
+          dbname="ventures_db", user="postgres", password="postgres",
+      )
+      try:
+          with conn.cursor() as cur:
+              cur.execute(CREATE_TABLE_SQL)
+              cur.execute(ADD_FEEDBACK_COLUMNS_SQL)
+          conn.commit()
+          print("Ensured ventures_db.llm_evaluations exists (incl. feedback columns)")
+      finally:
+          conn.close()

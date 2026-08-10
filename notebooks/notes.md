@@ -1,0 +1,4 @@
+- Touch on general search, which outputs multiple answers vs specialized search, requiring single answers
+- Touch on qualitative (what does..) vs quantitative search (how many..)
+  - how will this be implemented?
+- User feedback collection - via love/like/dislike feedback
